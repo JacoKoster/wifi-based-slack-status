@@ -81,6 +81,8 @@ function setSlackStatus(status) {
         });
 }
 
+let lastWifiName = "";
+
 function getStatus(callback) {
 
     let wiFiName;
@@ -88,10 +90,23 @@ function getStatus(callback) {
     // Get appropriate function for platform
     switch (platform) {
         case 'darwin':
-            //let's use the corelocation thingie and see if we can make it a bit more finegrained
-            getLocation(callback);
 
-            //wiFiName = getMacWiFiName();
+            wiFiName = getMacWiFiName();
+
+            //It's a bit too much to ask for the specific location when we know we are at the same location...
+            if(lastWifiName !== wiFiName) {
+                getLocation(callback);
+
+            } else {
+                //but do check once in while, you'll never know...
+                if(Math.floor(Math.random() * 42) + 1 === 42) {
+                    getLocation(callback);
+                    console.log("doing a random check!");
+                }
+            }
+
+            lastWifiName = wiFiName;
+
             break;
         case 'win32':
             wiFiName = getWinWiFiName();
