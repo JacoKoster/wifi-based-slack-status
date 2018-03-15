@@ -5,9 +5,20 @@ const axios = require("axios");
 const execSync = require("child_process").execSync;
 const querystring = require("querystring");
 const config = require("./config");
+const platform = os.platform();
+const cl = require('corelocation');
+
+const googleMapsClient = require('@google/maps').createClient({
+    key: config.mapsKey
+});
 
 if (!config.slackToken) {
     console.error("Missing Slack token. Set it in config.js");
+    process.exit(1);
+}
+
+if(platform !== 'darwin' && platform !== 'win32' && platform !== 'linux' ) {
+    console.error('Unsupported platform %s', platform);
     process.exit(1);
 }
 
@@ -37,7 +48,16 @@ function getWinWiFiName() {
             .find(ssid => true); // find first
 }
 
-function setSlackStatus(token, status) {
+let lastStatus = "";
+
+function setSlackStatus(status) {
+    let token = config.slackToken;
+
+    if ( status === lastStatus ) {
+        //console.log('Skip setting status, is the same as last time');
+        return;
+    }
+
     return axios.post("https://slack.com/api/users.profile.set",
         querystring.stringify({
             token: token,
@@ -47,42 +67,71 @@ function setSlackStatus(token, status) {
             "Content-Type": "application/x-www-form-urlencoded"
           }
         }).then(function(response) {
-            console.log("Set Slack status API response: %j", response.data);
+            if(response.ok === false) {
+                console.error("Slack status API error response: %s", response);
+                return;
+            }
+
+            lastStatus = status;
+
+            //console.log("Set Slack status API response: %j", response.data);
         })
         .catch(function(error) {
             console.error("Set Slack status error: %s", error);
         });
 }
 
-const platform = os.platform();
+function getStatus(callback) {
 
-let wiFiName;
-let getWiFiName;
-// Get appropriate function for platform
-switch (platform) {
-  case 'darwin':
-    getWiFiName = getMacWiFiName;
-    break;
-  case 'win32':
-    getWiFiName = getWinWiFiName;
-    break;
-  case 'linux':
-    getWiFiName = getLinuxWiFiName;
-    break;
-  default:
-    console.error('Unknown platform %s', platform);
-    process.exit(1);
+    let wiFiName;
+
+    // Get appropriate function for platform
+    switch (platform) {
+        case 'darwin':
+            //let's use the corelocation thingie and see if we can make it a bit more finegrained
+            getLocation(callback);
+
+            //wiFiName = getMacWiFiName();
+            break;
+        case 'win32':
+            wiFiName = getWinWiFiName();
+
+            callback(config.statusByWiFiName[wiFiName]);
+            break;
+        case 'linux':
+            wiFiName = getLinuxWiFiName();
+
+            callback(config.statusByWiFiName[wiFiName]);
+            break;
+        default:
+            callback(config.statusHidden);
+            break;
+    }
 }
 
-setInterval(function() {
-    wiFiName = getWiFiName();
-    console.log("Connected WiFi SSID: %s", wiFiName);
+function getLocation(callback) {
 
-    const status = config.statusByWiFiName[wiFiName];
-    if (!status) {
-        console.log("Status not specified for WiFi: %s", wiFiName);
-        return;
-    }
-    console.log("Setting Slack status to: %j", status);
-    setSlackStatus(config.slackToken, status);
-}, config.updateInterval);
+    let longLat = cl.getLocation();
+
+    googleMapsClient.reverseGeocode({
+        latlng: [longLat[1],longLat[0]],
+        result_type: ['locality'],
+    }, function(err, response) {
+        if (!err) {
+            let location = response.json.results[0].address_components[0].long_name;
+
+            callback(config.statusByLocation[location])
+        } else {
+            console.log(err);
+        }
+    });
+}
+
+function updater() {
+    getStatus(setSlackStatus);
+
+}
+
+setInterval(updater, config.updateInterval);
+
+updater();
